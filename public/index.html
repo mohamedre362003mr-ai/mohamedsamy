@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fbf7f0">
+  <meta name="format-detection" content="telephone=no">
+  <!--META-->
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/store.css">
+  <script>document.documentElement.classList.add('js')</script>
+</head>
+<body>
+  <a class="skip" href="#view">تخطي إلى المحتوى</a>
+  <div class="announce" id="announce" hidden></div>
+
+  <header class="hdr" id="hdr">
+    <div class="container hdr-row">
+      <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="فتح القائمة" aria-controls="menuDrawer" aria-expanded="false"></button>
+      <a class="logo" href="/" data-link id="logo"><span class="logo-mark"></span><span class="logo-text">__STORE_NAME__</span></a>
+      <form class="search" id="searchForm" role="search" action="/search">
+        <input type="search" name="q" id="searchInput" placeholder="ابحث عن كتاب، مؤلف..." autocomplete="off" enterkeyhint="search" aria-label="بحث">
+        <button type="submit" aria-label="بحث" class="search-btn"></button>
+      </form>
+      <div class="hdr-actions">
+        <button class="icon-btn cart-btn" id="cartBtn" type="button" aria-label="سلة المشتريات"><span class="cart-count" id="cartCount">0</span></button>
+      </div>
+    </div>
+    <nav class="catnav" id="catNav" aria-label="الأقسام"><div class="container catnav-in" id="catNavIn"></div></nav>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+  <footer class="ftr" id="footer"></footer>
+
+  <!-- القائمة الجانبية -->
+  <aside class="drawer drawer-menu" id="menuDrawer" aria-hidden="true" aria-label="القائمة">
+    <div class="drawer-head">
+      <strong id="drawerTitle">القائمة</strong>
+      <button class="icon-btn" type="button" data-close aria-label="إغلاق"></button>
+    </div>
+    <div class="drawer-body" id="menuBody"></div>
+  </aside>
+
+  <!-- سلة جانبية -->
+  <aside class="drawer drawer-cart" id="cartDrawer" aria-hidden="true" aria-label="السلة">
+    <div class="drawer-head">
+      <strong>سلة المشتريات</strong>
+      <button class="icon-btn" type="button" data-close aria-label="إغلاق"></button>
+    </div>
+    <div class="drawer-body" id="cartBody"></div>
+    <div class="drawer-foot" id="cartFoot"></div>
+  </aside>
+
+  <div class="overlay" id="overlay" hidden></div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <a class="wa-float" id="waFloat" href="#" target="_blank" rel="noopener" aria-label="تواصل عبر واتساب" hidden></a>
+
+  <script src="/js/app.js" defer></script>
+</body>
+</html>
