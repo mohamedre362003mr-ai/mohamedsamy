@@ -279,6 +279,14 @@
     ['المتجر', [['#/products', 'book', 'المنتجات'], ['#/categories', 'grid', 'الأقسام'], ['#/homepage', 'layout', 'تصميم الصفحة الرئيسية'], ['#/coupons', 'tag', 'كوبونات الخصم']]],
     ['الإعدادات', [['#/shipping', 'truck', 'أسعار الشحن'], ['#/payment', 'wallet', 'الدفع وواتساب'], ['#/settings', 'cog', 'إعدادات المتجر']]],
   ];
+  function storageWarning() {
+    const st = state.storage || {};
+    const msgs = [];
+    if (st.ephemeral) msgs.push('قاعدة البيانات غير مربوطة: الطلبات والتعديلات <b>مؤقتة وهتضيع</b>. من Vercel ← Storage اربط <b>Neon (Postgres)</b> بالمشروع ثم اعمل Redeploy.');
+    if (st.vercel && st.images !== 'blob') msgs.push('تخزين الصور غير مربوط: الصور المرفوعة <b>هتضيع</b>. من Vercel ← Storage اعمل <b>Blob</b> واربطه بالمشروع ثم اعمل Redeploy.');
+    if (!msgs.length) return '';
+    return `<div style="margin:0 28px 8px;padding:12px 16px;border-radius:12px;background:var(--err-soft);color:var(--err);font-size:14px;display:grid;gap:6px;border:1px solid #f3c6cb">${msgs.map((m) => `<div style="display:flex;gap:8px;align-items:flex-start">${icon('info', 'ico-sm')}<span>${m}</span></div>`).join('')}</div>`;
+  }
   function renderShell() {
     $('#root').innerHTML = `<div class="app">
       <aside class="side" id="side">
@@ -289,6 +297,7 @@
       <div class="overlay" id="overlay" hidden></div>
       <div class="main">
         <header class="topbar" id="topbar"><button class="icon-btn menu-btn" id="menuBtn" aria-label="القائمة">${icon('menu')}</button><h1 id="pageTitle"></h1><div class="row" id="topActions"></div></header>
+        ${storageWarning()}
         <div class="content" id="content"></div>
       </div>
     </div>`;
@@ -1199,6 +1208,7 @@
     try {
       const me = await api('/api/admin/me');
       state.me = me.email;
+      state.storage = me.storage;
     } catch (_) { return; }
     const { settings } = await api('/api/admin/settings');
     state.settings = settings;

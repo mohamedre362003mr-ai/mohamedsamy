@@ -58,25 +58,38 @@ npm start
 البريد: `mohamedsamy@gmail.com` — وكلمة المرور المتفق عليها. غيّرها من **إعدادات المتجر ← بيانات دخول لوحة التحكم**.
 ممكن كمان تحددها من متغيرات البيئة `ADMIN_EMAIL` و `ADMIN_PASSWORD`.
 
-## الرفع على سيرفر (Deploy)
+## الرفع على Vercel
 
-المشروع محتاج استضافة تشغل **Node.js** ومعاها **مساحة تخزين دائمة** لمجلد `data/` (فيه الطلبات والصور المرفوعة):
+Vercel مش بيحفظ ملفات على السيرفر، فالمتجر بيستخدم هناك **قاعدة بيانات Postgres** للبيانات و**Vercel Blob** للصور. الاتنين مجانيين ومن داخل Vercel نفسه:
+
+1. اعمل Import للريبو على Vercel (من غير أي إعدادات).
+2. من صفحة المشروع على Vercel ← تبويب **Storage**:
+   - اضغط **Create Database** ← اختار **Neon (Postgres)** ← Create ← واربطه بالمشروع (Connect). هيضيف `DATABASE_URL` تلقائياً.
+   - اضغط **Create Database** تاني ← اختار **Blob** ← Create ← واربطه بالمشروع. هيضيف `BLOB_READ_WRITE_TOKEN` تلقائياً.
+3. من تبويب **Deployments** ← آخر Deploy ← **Redeploy**.
+
+أول ما يشتغل بيعمل الجداول والبيانات التجريبية لوحده. لو نسيت خطوة الربط، لوحة التحكم هتظهرلك تنبيه أحمر.
+
+## الرفع على سيرفر عادي (VPS / Railway / Render / Docker)
+
+بيشتغل بملفات داخل مجلد `data/`، فمحتاج **مساحة تخزين دائمة** للمجلد ده:
 
 - **VPS** (Hostinger / DigitalOcean / Contabo ...): `npm install && npm start` (ويفضل مع `pm2`).
-- **Railway / Render**: اربط الريبو، أمر التشغيل `npm start`، وأضف Volume/Disk وخلي `DATA_DIR` يشاور عليه (مثال: `/data`).
+- **Railway / Render**: اربط الريبو، أمر التشغيل `npm start`، وأضف Volume/Disk وخلي `DATA_DIR` يشاور عليه (مثال: `/data`). أو بدل كده ضيف `DATABASE_URL` لأي Postgres.
 - **Docker**: `docker build -t store . && docker run -p 3000:3000 -v store-data:/app/data store`
 
-> ⚠️ استضافات زي Vercel/Netlify مش مناسبة لأنها مش بتحفظ الملفات المرفوعة.
-
-متغيرات البيئة (كلها اختيارية):
+## متغيرات البيئة (كلها اختيارية)
 
 | المتغير | الوصف |
 |---|---|
+| `DATABASE_URL` (أو `POSTGRES_URL`) | قاعدة بيانات Postgres — لو موجودة بيتحفظ فيها كل حاجة بدل الملفات |
+| `BLOB_READ_WRITE_TOKEN` | تخزين الصور على Vercel Blob |
 | `PORT` | المنفذ (افتراضي 3000) |
-| `DATA_DIR` | مكان حفظ البيانات والصور (افتراضي `./data`) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | تغيير بيانات دخول الأدمن |
+| `DATA_DIR` | مكان حفظ البيانات والصور بدون قاعدة بيانات (افتراضي `./data`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | فرض بيانات دخول الأدمن (بتلغي أي تغيير من اللوحة) |
 | `NODE_ENV=production` | تفعيل الكاش للصفحة الرئيسية |
 
 ## النسخ الاحتياطي
 
-كل البيانات في مجلد `data/` — انسخه بالكامل (db.json + analytics.json + uploads/) للحصول على نسخة احتياطية.
+- بدون قاعدة بيانات: كل البيانات في مجلد `data/` — انسخه بالكامل.
+- مع Postgres: من لوحة Neon (Backups / Branches).

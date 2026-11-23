@@ -1,12 +1,10 @@
 'use strict';
 const express = require('express');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const { db, analytics, UPLOAD_DIR } = require('./db');
+const db = require('./db');
 const { uid, str, num, bool, uniqueSlug, normalizePhone } = require('./util');
-const { limiter } = require('./api-public');
+const { limiter, wrap } = require('./api-public');
+const { imageUpload, saveImage, isImageUrl, USE_BLOB } = require('./storage');
 const S = require('./store');
 
 const router = express.Router();
@@ -61,7 +59,7 @@ router.post('/logout', (req, res) => {
 
 router.use(auth);
 
-router.get('/me', (req, res) => res.json({ email: D().admin.email }));
+router.get('/me', (req, res) => res.json({ email: D().admin.email, storage: { mode: db.MODE, images: USE_BLOB ? 'blob' : 'disk', ephemeral: db.EPHEMERAL, vercel: db.ON_VERCEL } }));
 
 router.post('/password', (req, res) => {
   const { current, email, password } = req.body || {};
@@ -83,35 +81,21 @@ router.post('/password', (req, res) => {
 });
 
 /* ---------------- رفع الصور ---------------- */
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const d = new Date();
-      const sub = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const dir = path.join(UPLOAD_DIR, sub);
-      fs.mkdirSync(dir, { recursive: true });
-      req._sub = sub;
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => cb(null, `${uid(10)}${({ 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' }[file.mimetype] || '.jpg')}`),
-  }),
-  limits: { fileSize: 12 * 1024 * 1024, files: 1 },
-  fileFilter: (req, file, cb) => cb(null, /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)),
-});
-router.post('/upload', upload.single('file'), (req, res) => {
+router.post('/upload', imageUpload().single('file'), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'الصيغ المسموحة: JPG, PNG, WEBP' });
-  res.json({ url: `/uploads/${req._sub}/${req.file.filename}` });
-});
+  const d = new Date();
+  res.json({ url: await saveImage(req.file, `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`) });
+}));
 
 /* ---------------- الإحصائيات ---------------- */
 const DAY = 86400000;
 const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
-router.get('/stats', (req, res) => {
-  const orders = D().orders;
+router.get('/stats', wrap(async (req, res) => {
+  const orders = await db.orders.list();
   const valid = orders.filter((o) => o.status !== 'cancelled');
   const today = startOfDay(Date.now());
-  const visitors = Object.values(analytics.get().visitors);
+  const visitors = await db.visitors.list({ since: today - 29 * DAY });
   const days = [];
   for (let i = 13; i >= 0; i--) {
     const s = today - i * DAY;
@@ -157,7 +141,7 @@ router.get('/stats', (req, res) => {
     topProducts: Object.values(prodSales).sort((a, b) => b.qty - a.qty).slice(0, 5),
     recent: orders.slice(0, 6).map(orderSummary),
   });
-});
+}));
 
 /* ---------------- الطلبات ---------------- */
 const STATUSES = ['new', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -165,28 +149,29 @@ function orderSummary(o) {
   return { id: o.id, number: o.number, status: o.status, name: o.customer.name, phone: o.customer.phone, governorate: o.customer.governorate, total: o.total, items: o.items.reduce((a, l) => a + l.qty, 0), createdAt: o.createdAt, receipt: !!o.receipt, whatsappClicked: !!o.whatsappClicked, source: o.source };
 }
 
-router.get('/orders', (req, res) => {
-  let list = D().orders;
+router.get('/orders', wrap(async (req, res) => {
+  const all = await db.orders.list();
+  let list = all;
   if (req.query.status && req.query.status !== 'all') list = list.filter((o) => o.status === req.query.status);
   if (req.query.q) {
     const q = S.normalizeArabic(req.query.q);
     const qp = normalizePhone(req.query.q);
     list = list.filter((o) => String(o.number).includes(q) || S.normalizeArabic(o.customer.name).includes(q) || (qp && (o.customer.phone.includes(qp) || o.customer.phone2.includes(qp))));
   }
-  const counts = { all: D().orders.length };
-  for (const o of D().orders) counts[o.status] = (counts[o.status] || 0) + 1;
+  const counts = { all: all.length };
+  for (const o of all) counts[o.status] = (counts[o.status] || 0) + 1;
   res.json({ orders: list.slice(0, 500).map(orderSummary), counts });
-});
+}));
 
-router.get('/orders/:id', (req, res) => {
-  const o = D().orders.find((x) => x.id === req.params.id);
+router.get('/orders/:id', wrap(async (req, res) => {
+  const o = await db.orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'غير موجود' });
-  const prev = D().orders.filter((x) => x.customer.phone === o.customer.phone && x.id !== o.id).length;
+  const prev = (await db.orders.byPhone(o.customer.phone)).filter((x) => x.id !== o.id).length;
   res.json({ order: o, previousOrders: prev });
-});
+}));
 
-router.patch('/orders/:id', (req, res) => {
-  const o = D().orders.find((x) => x.id === req.params.id);
+router.patch('/orders/:id', wrap(async (req, res) => {
+  const o = await db.orders.get(req.params.id);
   if (!o) return res.status(404).json({ error: 'غير موجود' });
   const b = req.body || {};
   if (b.status && STATUSES.includes(b.status) && b.status !== o.status) {
@@ -199,6 +184,7 @@ router.patch('/orders/:id', (req, res) => {
         if (p.stock != null) p.stock = Math.max(p.stock + (nowCancelled ? l.qty : -l.qty), 0);
         p.sold = Math.max((p.sold || 0) + (nowCancelled ? -l.qty : l.qty), 0);
       }
+      db.save();
     }
     o.status = b.status;
     o.statusHistory.push({ status: b.status, at: Date.now(), note: str(b.note, 300), by: 'admin' });
@@ -206,22 +192,19 @@ router.patch('/orders/:id', (req, res) => {
     o.statusHistory.push({ status: o.status, at: Date.now(), note: str(b.note, 300), by: 'admin' });
   }
   if (b.adminNote != null) o.adminNote = str(b.adminNote, 1000);
-  db.save();
+  await db.orders.put(o);
   res.json({ order: o });
-});
+}));
 
-router.delete('/orders/:id', (req, res) => {
-  const i = D().orders.findIndex((x) => x.id === req.params.id);
-  if (i < 0) return res.status(404).json({ error: 'غير موجود' });
-  D().orders.splice(i, 1);
-  db.save();
+router.delete('/orders/:id', wrap(async (req, res) => {
+  await db.orders.remove(req.params.id);
   res.json({ ok: true });
-});
+}));
 
 /* ---------------- العملاء وخط السير ---------------- */
-router.get('/customers', (req, res) => {
+router.get('/customers', wrap(async (req, res) => {
   const map = new Map();
-  for (const o of D().orders) {
+  for (const o of await db.orders.list()) {
     const k = o.customer.phone;
     const c = map.get(k) || { phone: k, name: o.customer.name, phone2: o.customer.phone2, governorate: o.customer.governorate, orders: 0, spent: 0, last: 0, first: Infinity };
     c.orders++;
@@ -236,15 +219,12 @@ router.get('/customers', (req, res) => {
     list = list.filter((c) => S.normalizeArabic(c.name).includes(q) || c.phone.includes(normalizePhone(req.query.q) || '###'));
   }
   res.json({ customers: list });
-});
+}));
 
-function journeyFor(visitorIds) {
-  const A = analytics.get();
+function journeyFor(list) {
   const events = [];
   const visitors = [];
-  for (const id of visitorIds) {
-    const v = A.visitors[id];
-    if (!v) continue;
+  for (const v of list) {
     visitors.push({ id: v.id, device: v.device, os: v.os, browser: v.browser, source: v.source, referrer: v.referrer, landing: v.landing, firstSeen: v.firstSeen, lastSeen: v.lastSeen });
     for (const e of v.events) events.push({ ...e, vid: v.id });
   }
@@ -252,35 +232,36 @@ function journeyFor(visitorIds) {
   return { visitors, events };
 }
 
-router.get('/customers/:phone', (req, res) => {
+router.get('/customers/:phone', wrap(async (req, res) => {
   const phone = req.params.phone;
-  const orders = D().orders.filter((o) => o.customer.phone === phone);
+  const orders = await db.orders.byPhone(phone);
   if (!orders.length) return res.status(404).json({ error: 'غير موجود' });
-  const vids = new Set(orders.map((o) => o.visitorId).filter(Boolean));
-  for (const v of Object.values(analytics.get().visitors)) if (v.phone === phone) vids.add(v.id);
-  const j = journeyFor([...vids]);
+  const vs = new Map();
+  for (const v of await db.visitors.byPhone(phone)) vs.set(v.id, v);
+  for (const id of new Set(orders.map((o) => o.visitorId).filter(Boolean))) {
+    if (!vs.has(id)) { const v = await db.visitors.get(id); if (v) vs.set(id, v); }
+  }
+  const j = journeyFor([...vs.values()]);
   res.json({ customer: { ...orders[0].customer }, orders: orders.map(orderSummary), ...j });
-});
+}));
 
-router.get('/visitors', (req, res) => {
-  const list = Object.values(analytics.get().visitors)
-    .sort((a, b) => b.lastSeen - a.lastSeen)
-    .slice(0, 300)
+router.get('/visitors', wrap(async (req, res) => {
+  const list = (await db.visitors.list({ limit: 300 }))
     .map((v) => ({
       id: v.id, device: v.device, os: v.os, browser: v.browser, source: v.source, referrer: v.referrer,
       firstSeen: v.firstSeen, lastSeen: v.lastSeen, pages: v.events.length, name: v.name, phone: v.phone,
       ordered: (v.orders || []).length > 0, carted: v.events.some((e) => e.type === 'add_to_cart'),
       last: v.events.length ? v.events[v.events.length - 1] : null,
     }));
-  res.json({ visitors: list, total: Object.keys(analytics.get().visitors).length });
-});
+  res.json({ visitors: list, total: await db.visitors.count() });
+}));
 
-router.get('/visitors/:id', (req, res) => {
-  const v = analytics.get().visitors[req.params.id];
+router.get('/visitors/:id', wrap(async (req, res) => {
+  const v = await db.visitors.get(req.params.id);
   if (!v) return res.status(404).json({ error: 'غير موجود' });
-  const j = journeyFor([v.id]);
+  const j = journeyFor([v]);
   res.json({ visitor: { ...j.visitors[0], name: v.name, phone: v.phone, orders: v.orders || [] }, events: j.events });
-});
+}));
 
 /* ---------------- المنتجات ---------------- */
 function cleanProduct(b, existing) {
@@ -295,7 +276,7 @@ function cleanProduct(b, existing) {
   p.price = Math.max(num(b.price), 0);
   p.oldPrice = Math.max(num(b.oldPrice), 0);
   p.description = str(b.description, 8000);
-  p.images = (Array.isArray(b.images) ? b.images : []).filter((x) => typeof x === 'string' && x.startsWith('/uploads/')).slice(0, 10);
+  p.images = (Array.isArray(b.images) ? b.images : []).filter(isImageUrl).slice(0, 10);
   p.categoryId = D().categories.some((c) => c.id === b.categoryId) ? b.categoryId : '';
   p.stock = b.stock === '' || b.stock == null ? null : Math.max(parseInt(b.stock, 10) || 0, 0);
   p.featured = bool(b.featured);
@@ -357,7 +338,7 @@ function cleanCategory(b, c) {
   c.name = str(b.name, 100);
   c.slug = uniqueSlug(b.slug || b.name, D().categories, c.id);
   c.description = str(b.description, 300);
-  c.image = typeof b.image === 'string' && (b.image === '' || b.image.startsWith('/uploads/')) ? b.image : c.image || '';
+  c.image = b.image === '' || isImageUrl(b.image) ? b.image : c.image || '';
   c.showInMenu = b.showInMenu == null ? true : bool(b.showInMenu);
   c.active = b.active == null ? true : bool(b.active);
   return c;
@@ -414,7 +395,7 @@ router.put('/settings', (req, res) => {
   const s = D().settings;
   if (b.storeName != null) s.storeName = str(b.storeName, 80) || s.storeName;
   if (b.tagline != null) s.tagline = str(b.tagline, 150);
-  if (b.logo != null) s.logo = String(b.logo).startsWith('/uploads/') ? b.logo : '';
+  if (b.logo != null) s.logo = isImageUrl(b.logo) ? b.logo : '';
   if (b.about != null) s.about = str(b.about, 1000);
   if (b.currency != null) s.currency = str(b.currency, 10) || 'ج.م';
   if (b.announcement) s.announcement = { enabled: bool(b.announcement.enabled), text: str(b.announcement.text, 250) };

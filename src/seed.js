@@ -2,10 +2,10 @@
 /* البيانات الافتراضية لأول تشغيل + صور SVG تجريبية (يستبدلها الأدمن بصوره) */
 const fs = require('fs');
 const path = require('path');
-const { UPLOAD_DIR } = require('./db');
 const { uid, slugify, escHtml } = require('./util');
 
-const SEED_DIR = path.join(UPLOAD_DIR, 'seed');
+// الصور التجريبية محفوظة كملفات ثابتة في public/seed (تتولد بالأمر: npm run seed-images)
+const SEED_FILES = {};
 
 const PALETTES = [
   ['#1d2a3a', '#33506e', '#e2b86b'],
@@ -91,9 +91,15 @@ function catSVG(i) {
 }
 
 function writeSeed(name, svg) {
-  fs.mkdirSync(SEED_DIR, { recursive: true });
-  fs.writeFileSync(path.join(SEED_DIR, name), svg);
-  return `/uploads/seed/${name}`;
+  SEED_FILES[name] = svg;
+  return `/seed/${name}`;
+}
+
+function generateSeedImages(dir = path.join(__dirname, '..', 'public', 'seed')) {
+  buildSeed();
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, svg] of Object.entries(SEED_FILES)) fs.writeFileSync(path.join(dir, name), svg);
+  return Object.keys(SEED_FILES).length;
 }
 
 const GOVERNORATES = [
@@ -250,4 +256,6 @@ function buildSeed() {
   };
 }
 
-module.exports = { buildSeed, coverSVG };
+module.exports = { buildSeed, coverSVG, generateSeedImages };
+
+if (require.main === module) console.log(`✓ ${generateSeedImages()} صورة في public/seed`);

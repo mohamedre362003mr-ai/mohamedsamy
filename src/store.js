@@ -1,6 +1,6 @@
 'use strict';
 /* منطق المتجر المشترك: تجهيز المنتجات للعرض، حساب الطلبات، الكوبونات، الشحن */
-const { db } = require('./db');
+const db = require('./db');
 
 const D = () => db.get();
 

@@ -1,14 +1,13 @@
 'use strict';
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const { db, analytics, UPLOAD_DIR } = require('./db');
+const db = require('./db');
 const { uid, str, normalizePhone, parseUA } = require('./util');
+const { imageUpload, saveImage } = require('./storage');
 const S = require('./store');
 
 const router = express.Router();
 const D = () => db.get();
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 /* ---------- حد بسيط لعدد الطلبات لكل IP ---------- */
 function limiter(max, windowMs) {
@@ -110,27 +109,18 @@ function orderPublic(o) {
   };
 }
 
-function linkVisitor(vid, order) {
-  const A = analytics.get();
-  if (!vid || !A.visitors[vid]) return;
-  const v = A.visitors[vid];
-  v.name = order.customer.name;
-  v.phone = order.customer.phone;
-  v.orders = Array.from(new Set([...(v.orders || []), order.id]));
-  analytics.save();
-}
-
-function pushEvent(vid, ev) {
-  const A = analytics.get();
-  const v = vid && A.visitors[vid];
+async function visitorEvent(vid, ev, link) {
+  if (!vid) return;
+  const v = await db.visitors.get(vid);
   if (!v) return;
+  if (link) { v.name = link.customer.name; v.phone = link.customer.phone; v.orders = Array.from(new Set([...(v.orders || []), link.id])); }
   v.events.push({ t: Date.now(), ...ev });
   if (v.events.length > 400) v.events.splice(0, v.events.length - 400);
   v.lastSeen = Date.now();
-  analytics.save();
+  await db.visitors.put(v);
 }
 
-router.post('/orders', limiter(15, 60 * 60 * 1000), (req, res) => {
+router.post('/orders', limiter(15, 60 * 60 * 1000), wrap(async (req, res) => {
   const b = req.body || {};
   const c = b.customer || {};
   const customer = {
@@ -154,11 +144,10 @@ router.post('/orders', limiter(15, 60 * 60 * 1000), (req, res) => {
   if (!q.lines.length) return res.status(400).json({ error: 'السلة فارغة' });
   customer.governorate = q.zone.name;
 
-  const data = D();
   const order = {
     id: uid(8),
     token: uid(12),
-    number: data.nextOrderNumber++,
+    number: await db.orders.nextNumber(),
     status: 'new',
     statusHistory: [{ status: 'new', at: Date.now(), note: 'تم إنشاء الطلب' }],
     customer,
@@ -178,70 +167,53 @@ router.post('/orders', limiter(15, 60 * 60 * 1000), (req, res) => {
   };
   // خصم المخزون وزيادة المبيعات
   for (const l of q.lines) {
-    const p = data.products.find((x) => x.id === l.productId);
+    const p = D().products.find((x) => x.id === l.productId);
     if (p) {
       if (p.stock != null) p.stock = Math.max(p.stock - l.qty, 0);
       p.sold = (p.sold || 0) + l.qty;
     }
   }
   if (q.couponObj && q.discount > 0) q.couponObj.uses = (q.couponObj.uses || 0) + 1;
-  data.orders.unshift(order);
   db.save();
-  linkVisitor(order.visitorId, order);
-  pushEvent(order.visitorId, { type: 'order', path: '/checkout', data: { orderId: order.id, number: order.number, total: order.total } });
+  await db.orders.put(order);
+  await visitorEvent(order.visitorId, { type: 'order', path: '/checkout', data: { orderId: order.id, number: order.number, total: order.total } }, order);
   res.json({ id: order.id, token: order.token, number: order.number });
-});
+}));
 
-function getOrder(req) {
-  const o = D().orders.find((x) => x.id === req.params.id);
+async function getOrder(req) {
+  const o = await db.orders.get(req.params.id);
   if (!o || o.token !== String(req.query.t || req.body?.t || '')) return null;
   return o;
 }
 
-router.get('/orders/:id', (req, res) => {
-  const o = getOrder(req);
+router.get('/orders/:id', wrap(async (req, res) => {
+  const o = await getOrder(req);
   if (!o) return res.status(404).json({ error: 'الطلب غير موجود' });
   res.json({ order: orderPublic(o) });
-});
+}));
 
-router.post('/orders/:id/whatsapp', (req, res) => {
-  const o = getOrder(req);
+router.post('/orders/:id/whatsapp', wrap(async (req, res) => {
+  const o = await getOrder(req);
   if (!o) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!o.whatsappClicked) {
     o.whatsappClicked = true;
     o.statusHistory.push({ status: o.status, at: Date.now(), note: 'العميل ضغط زر واتساب لتأكيد الدفع' });
-    db.save();
+    await db.orders.put(o);
   }
-  pushEvent(o.visitorId, { type: 'whatsapp', path: '/thanks', data: { number: o.number } });
+  await visitorEvent(o.visitorId, { type: 'whatsapp', path: '/thanks', data: { number: o.number } });
   res.json({ ok: true });
-});
+}));
 
-const receiptUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const d = path.join(UPLOAD_DIR, 'receipts');
-      fs.mkdirSync(d, { recursive: true });
-      cb(null, d);
-    },
-    filename: (req, file, cb) => cb(null, `${uid(10)}${({ 'image/png': '.png', 'image/webp': '.webp' }[file.mimetype] || '.jpg')}`),
-  }),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
-  fileFilter: (req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
-});
-
-router.post('/orders/:id/receipt', limiter(20, 60 * 60 * 1000), receiptUpload.single('file'), (req, res) => {
-  const o = getOrder(req);
-  if (!o) {
-    if (req.file) fs.unlink(req.file.path, () => {});
-    return res.status(404).json({ error: 'الطلب غير موجود' });
-  }
+router.post('/orders/:id/receipt', limiter(20, 60 * 60 * 1000), imageUpload(/^image\/(jpeg|png|webp)$/).single('file'), wrap(async (req, res) => {
+  const o = await getOrder(req);
+  if (!o) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!req.file) return res.status(400).json({ error: 'ارفع صورة بصيغة JPG أو PNG' });
-  o.receipt = `/uploads/receipts/${req.file.filename}`;
+  o.receipt = await saveImage(req.file, 'receipts');
   o.statusHistory.push({ status: o.status, at: Date.now(), note: 'العميل رفع صورة إيصال الدفع' });
-  db.save();
-  pushEvent(o.visitorId, { type: 'receipt', path: '/thanks', data: { number: o.number } });
+  await db.orders.put(o);
+  await visitorEvent(o.visitorId, { type: 'receipt', path: '/thanks', data: { number: o.number } });
   res.json({ receipt: o.receipt });
-});
+}));
 
 /* ---------- تتبع خط سير الزائر ---------- */
 function cleanData(d) {
@@ -255,35 +227,33 @@ function cleanData(d) {
   return out;
 }
 const EVENT_TYPES = new Set(['page', 'product', 'category', 'search', 'add_to_cart', 'remove_from_cart', 'cart', 'checkout', 'landing', 'whatsapp_float']);
-router.post('/track', express.text({ type: '*/*', limit: '64kb' }), (req, res) => {
+router.post('/track', express.text({ type: '*/*', limit: '64kb' }), wrap(async (req, res) => {
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = {}; } }
   const vid = String(body.vid || '');
   if (!/^[a-z0-9]{8,40}$/i.test(vid)) return res.status(204).end();
-  const A = analytics.get();
   const now = Date.now();
-  let v = A.visitors[vid];
+  let v = await db.visitors.get(vid);
   if (!v) {
     const ua = parseUA(req.headers['user-agent']);
-    v = A.visitors[vid] = {
+    v = {
       id: vid, firstSeen: now, lastSeen: now, ...ua,
       referrer: str(body.referrer, 300), source: str(body.source, 120), landing: str(body.landing, 300),
       events: [], orders: [], name: '', phone: '',
     };
-    const keys = Object.keys(A.visitors);
-    if (keys.length > 8000) {
-      keys.sort((a, b) => A.visitors[a].lastSeen - A.visitors[b].lastSeen).slice(0, 500).forEach((k) => delete A.visitors[k]);
-    }
   }
+  let added = 0;
   for (const e of (Array.isArray(body.events) ? body.events : []).slice(0, 30)) {
     if (!EVENT_TYPES.has(e.type)) continue;
     const ago = Math.min(Math.max(Number(e.ago) || 0, 0), 600000);
     v.events.push({ t: now - ago, type: e.type, path: str(e.path, 200), title: str(e.title, 150), data: cleanData(e.data) });
+    added++;
   }
+  if (!added) return res.status(204).end();
   if (v.events.length > 400) v.events.splice(0, v.events.length - 400);
   v.lastSeen = now;
-  analytics.save();
+  await db.visitors.put(v);
   res.status(204).end();
-});
+}));
 
-module.exports = { router, limiter, publicSettings };
+module.exports = { router, limiter, publicSettings, wrap };

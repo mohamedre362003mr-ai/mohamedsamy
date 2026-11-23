@@ -6,14 +6,18 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "seed-images": "node src/seed.js"
   },
   "engines": {
     "node": ">=18.17"
   },
   "dependencies": {
+    "@vercel/blob": "^1.1.1",
     "compression": "^1.7.5",
     "express": "^4.21.2",
-    "multer": "^2.0.2"
-  }
+    "multer": "^2.0.2",
+    "pg": "^8.23.1"
+  },
+  "type": "commonjs"
 }
